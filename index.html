@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#17406B">
+<title>あの場所は今 ― イーグル隊長の空中散歩</title>
+<meta name="description" content="イーグル隊長の足につかまって、思い出の場所の「今」へひとっ飛び。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-view="auth">
+
+<div id="config-warning" class="config-warning" hidden>
+  config.js の GAS_URL が未設定です。README の手順に沿って設定してください。
+</div>
+
+<header class="topbar" id="topbar" hidden>
+  <span class="brand">あの場所は今</span>
+  <span class="who" id="who"></span>
+  <button type="button" class="topbar-btn" id="btn-logout">ログアウト</button>
+</header>
+
+<main id="main">
+
+  <!-- ========== ログイン / 登録 / 再発行 ========== -->
+  <section id="view-auth" class="view view-auth">
+    <div class="auth-wrap">
+      <div class="auth-hero">
+        <div class="auth-eagle" data-eagle="still"></div>
+        <h1 class="display">あの場所は今</h1>
+        <p class="lead">イーグル隊長の足につかまって、<br>思い出の場所の「今」へひとっ飛び。</p>
+      </div>
+
+      <div class="auth-card">
+        <div class="tabs" role="tablist" aria-label="ログイン方法">
+          <button type="button" class="tab" role="tab" data-tab="login" aria-selected="true">ログイン</button>
+          <button type="button" class="tab" role="tab" data-tab="register" aria-selected="false">はじめての方</button>
+          <button type="button" class="tab" role="tab" data-tab="forgot" aria-selected="false">パスワードを忘れた</button>
+        </div>
+
+        <form id="form-login" class="form" novalidate>
+          <label class="field">
+            <span>メールアドレス</span>
+            <input type="email" name="email" id="login-email" autocomplete="email" required>
+          </label>
+          <label class="field">
+            <span>パスワード</span>
+            <span class="pw-wrap">
+              <input type="password" name="password" id="login-pw" autocomplete="current-password" required>
+              <button type="button" class="eye" aria-controls="login-pw" aria-pressed="false" aria-label="パスワードを表示"></button>
+            </span>
+          </label>
+          <button type="submit" class="btn btn-primary">ログイン</button>
+        </form>
+
+        <form id="form-register" class="form" novalidate hidden>
+          <p class="form-note">メールアドレスに仮パスワードをお送りします。ログイン後、ご自分のパスワードに変更してください。</p>
+          <label class="field">
+            <span>ニックネーム（20文字まで）</span>
+            <input type="text" name="nickname" maxlength="20" autocomplete="nickname" required>
+          </label>
+          <label class="field">
+            <span>メールアドレス</span>
+            <input type="email" name="email" autocomplete="email" required>
+          </label>
+          <button type="submit" class="btn btn-primary">仮パスワードを受け取る</button>
+        </form>
+
+        <form id="form-forgot" class="form" novalidate hidden>
+          <p class="form-note">登録したメールアドレスに、新しい仮パスワードをお送りします。</p>
+          <label class="field">
+            <span>メールアドレス</span>
+            <input type="email" name="email" autocomplete="email" required>
+          </label>
+          <button type="submit" class="btn btn-primary">仮パスワードを再発行</button>
+        </form>
+
+        <p class="msg" id="auth-msg" role="status" aria-live="polite"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== パスワード変更 ========== -->
+  <section id="view-change" class="view view-narrow" hidden>
+    <div class="card">
+      <h2 class="h2">パスワードを変更</h2>
+      <p class="form-note" id="change-note">仮パスワードでログインしました。ご自分だけのパスワードに変更してください（8文字以上・英字と数字を含む）。</p>
+      <form id="form-change" class="form" novalidate>
+        <label class="field">
+          <span>今のパスワード（仮パスワード）</span>
+          <span class="pw-wrap">
+            <input type="password" name="currentPassword" id="cp-cur" autocomplete="current-password" required>
+            <button type="button" class="eye" aria-controls="cp-cur" aria-pressed="false" aria-label="パスワードを表示"></button>
+          </span>
+        </label>
+        <label class="field">
+          <span>新しいパスワード</span>
+          <span class="pw-wrap">
+            <input type="password" name="newPassword" id="cp-new" autocomplete="new-password" required minlength="8">
+            <button type="button" class="eye" aria-controls="cp-new" aria-pressed="false" aria-label="パスワードを表示"></button>
+          </span>
+        </label>
+        <label class="field">
+          <span>新しいパスワード（確認）</span>
+          <span class="pw-wrap">
+            <input type="password" name="confirm" id="cp-conf" autocomplete="new-password" required>
+            <button type="button" class="eye" aria-controls="cp-conf" aria-pressed="false" aria-label="パスワードを表示"></button>
+          </span>
+        </label>
+        <button type="submit" class="btn btn-primary">パスワードを変更</button>
+        <button type="button" class="btn btn-ghost" id="btn-change-cancel" hidden>あとで変更する</button>
+      </form>
+      <p class="msg" id="change-msg" role="status" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <!-- ========== ホーム（搭乗券） ========== -->
+  <section id="view-home" class="view view-home" hidden>
+    <div class="home-hero">
+      <div class="home-hero-inner">
+        <div>
+          <h1 class="display display-xl">あの場所は今</h1>
+          <p class="lead">行き先を書いて、イーグル隊長の足につかまるだけ。<br>上空から舞い降りて、思い出の場所の「今」を案内します。</p>
+        </div>
+        <div class="home-eagle" data-eagle="still"></div>
+      </div>
+    </div>
+
+    <div class="home-body">
+      <form id="form-flight" class="pass" novalidate>
+        <div class="pass-main">
+          <h2 class="pass-title">搭乗券</h2>
+          <label class="field">
+            <span>行き先（地名・住所・学校名など）</span>
+            <input type="text" name="place" maxlength="100" required placeholder="例：川崎市立〇〇小学校、多摩川の丸子橋">
+          </label>
+          <label class="field">
+            <span>いつ頃の思い出？</span>
+            <select name="era">
+              <option value="">とくに決めない</option>
+              <option>1950年代（昭和25〜34年ごろ）</option>
+              <option>1960年代（昭和35〜44年ごろ）</option>
+              <option>1970年代（昭和45〜54年ごろ）</option>
+              <option>1980年代（昭和55〜平成元年ごろ）</option>
+              <option>1990年代（平成2〜11年ごろ）</option>
+              <option>2000年代</option>
+              <option>2010年代</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>思い出メモ（任意・300文字まで）</span>
+            <textarea name="memory" rows="3" maxlength="300" placeholder="例：校門の前に駄菓子屋があって、毎日10円のくじを引いていた"></textarea>
+          </label>
+          <p class="msg" id="flight-msg" role="status" aria-live="polite"></p>
+        </div>
+        <div class="pass-stub">
+          <div class="stub-eagle" data-eagle="still"></div>
+          <dl class="stub-info">
+            <div><dt>便名</dt><dd>イーグル便</dd></div>
+            <div><dt>搭乗者</dt><dd id="pass-nickname">相棒</dd></div>
+            <div><dt>機長</dt><dd>イーグル隊長</dd></div>
+          </dl>
+          <button type="submit" class="btn btn-primary btn-board">隊長と飛び立つ</button>
+          <p class="stub-hint">音が出ます</p>
+        </div>
+      </form>
+
+      <section class="history" aria-labelledby="history-title">
+        <h2 class="h2" id="history-title">これまでのフライト</h2>
+        <div id="history-list" class="history-list"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ========== フライト ========== -->
+  <section id="view-flight" class="view view-flight" hidden>
+    <div class="stage" id="stage" data-phase="ready">
+      <div class="sky-fallback" aria-hidden="true">
+        <span class="cloud c1"></span><span class="cloud c2"></span><span class="cloud c3"></span><span class="cloud c4"></span>
+      </div>
+      <video id="video" muted playsinline preload="auto" aria-hidden="true"></video>
+
+      <div class="hud">
+        <span class="hud-phase" id="hud-phase">離陸準備中</span>
+        <span class="hud-place">行き先：<b id="hud-place"></b></span>
+      </div>
+      <div class="stage-actions">
+        <button type="button" class="stage-btn" id="btn-skip-flight">着陸まで飛ばす</button>
+        <button type="button" class="stage-btn" id="btn-abort">やめる</button>
+      </div>
+
+      <div class="eagle-rig" data-eagle="fly"></div>
+      <p class="bubble" id="bubble" aria-hidden="true"></p>
+      <p class="telop" id="telop" aria-live="polite"></p>
+      <p class="attribution" id="attribution"></p>
+
+      <div class="flight-error" id="flight-error" hidden>
+        <p id="flight-error-text"></p>
+        <button type="button" class="btn btn-primary" id="btn-error-home">行き先を入れ直す</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 到着（あの場所は今） ========== -->
+  <section id="view-arrival" class="view view-arrival" hidden>
+    <div class="arrival-head">
+      <h1 class="display" id="arr-title"></h1>
+      <p class="arr-address" id="arr-address"></p>
+      <p class="arr-era" id="arr-era"></p>
+    </div>
+
+    <div class="arrival-grid">
+      <div class="map-box">
+        <div class="map-tabs" role="tablist" aria-label="表示の切り替え">
+          <button type="button" class="map-tab" role="tab" data-map="street" aria-selected="true">ストリートビュー</button>
+          <button type="button" class="map-tab" role="tab" data-map="aerial" aria-selected="false">航空写真</button>
+          <button type="button" class="map-tab" role="tab" data-map="map" aria-selected="false">地図</button>
+        </div>
+        <div class="map-frame">
+          <iframe id="map-iframe" title="目的地の現在の様子" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen></iframe>
+          <div class="map-fallback" id="map-fallback" hidden>
+            <p>ストリートビューは Google マップで開けます。</p>
+            <a class="btn btn-ghost" id="map-fallback-link" target="_blank" rel="noopener">ストリートビューを開く</a>
+          </div>
+        </div>
+        <a class="map-open" id="map-open" target="_blank" rel="noopener">Google マップで大きく見る</a>
+      </div>
+
+      <div class="guide">
+        <div class="guide-captain">
+          <div class="guide-eagle" data-eagle="still"></div>
+          <p class="guide-bubble" id="arrival-bubble"></p>
+        </div>
+
+        <article class="guide-sec" data-key="then">
+          <h3>昔の面影</h3>
+          <p id="g-then"></p>
+        </article>
+        <article class="guide-sec" data-key="now">
+          <h3>今の姿</h3>
+          <p id="g-now"></p>
+        </article>
+        <article class="guide-sec" data-key="gap">
+          <h3>ここが変わったぜ</h3>
+          <p id="g-gap"></p>
+        </article>
+        <article class="guide-sec" data-key="trivia">
+          <h3>隊長の豆知識</h3>
+          <p id="g-trivia"></p>
+        </article>
+
+        <div class="sources" id="sources" hidden>
+          <h3>隊長が参考にした情報</h3>
+          <ul id="sources-list"></ul>
+        </div>
+        <p class="ai-note">解説はAIが作成しています。昔の様子などに誤りが含まれることがあります。</p>
+
+        <div class="arrival-actions">
+          <button type="button" class="btn btn-primary" id="btn-new-flight">別の場所へ飛ぶ</button>
+          <button type="button" class="btn btn-ghost" id="btn-refly">もう一度この空を飛ぶ</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ========== 音声コントローラー ========== -->
+<div class="voicebar" id="voicebar" hidden>
+  <button type="button" class="vb-btn" id="btn-play" aria-label="一時停止">一時停止</button>
+  <button type="button" class="vb-btn" id="btn-next">次へ</button>
+  <button type="button" class="vb-btn" id="btn-replay" hidden>もう一度聞く</button>
+  <label class="vb-range"><span>声</span><input type="range" id="vol-voice" min="0" max="1" step="0.05" value="0.9"></label>
+  <label class="vb-range"><span>効果音</span><input type="range" id="vol-se" min="0" max="1" step="0.05" value="0.6"></label>
+</div>
+
+<footer class="footer">
+  <span>あの場所は今 ― イーグル隊長の空中散歩</span>
+  <span class="version" id="app-version"></span>
+</footer>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
