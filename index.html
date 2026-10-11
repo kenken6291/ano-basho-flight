@@ -168,8 +168,16 @@
         </div>
       </form>
 
+      <p class="msg" id="history-msg" role="status" aria-live="polite"></p>
+
+      <section class="history" aria-labelledby="places-title">
+        <h2 class="h2" id="places-title">思い出の場所</h2>
+        <div id="places-list" class="history-list"></div>
+      </section>
+
       <section class="history" aria-labelledby="history-title">
-        <h2 class="h2" id="history-title">これまでのフライト</h2>
+        <h2 class="h2" id="history-title">最近のフライト</h2>
+        <p class="history-note">最近の30件まで表示します。残しておきたい場所は「思い出の場所に登録」を押してください。</p>
         <div id="history-list" class="history-list"></div>
       </section>
     </div>
@@ -181,11 +189,14 @@
       <div class="sky-fallback" aria-hidden="true">
         <span class="cloud c1"></span><span class="cloud c2"></span><span class="cloud c3"></span><span class="cloud c4"></span>
       </div>
+      <div class="earth3d" id="earth3d" aria-hidden="true"></div>
       <video id="video" muted playsinline preload="auto" aria-hidden="true"></video>
+      <div class="stage-pano" id="stage-pano"></div>
 
       <div class="hud">
         <span class="hud-phase" id="hud-phase">離陸準備中</span>
         <span class="hud-place">行き先：<b id="hud-place"></b></span>
+        <span class="hud-place hud-from" id="hud-from"></span>
       </div>
       <div class="stage-actions">
         <button type="button" class="stage-btn" id="btn-skip-flight">着陸まで飛ばす</button>
@@ -220,13 +231,17 @@
           <button type="button" class="map-tab" role="tab" data-map="map" aria-selected="false">地図</button>
         </div>
         <div class="map-frame">
-          <iframe id="map-iframe" title="目的地の現在の様子" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen></iframe>
+          <div class="map-pano" id="map-pano" hidden></div>
+          <iframe id="map-iframe" title="目的地の現在の様子" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen hidden></iframe>
           <div class="map-fallback" id="map-fallback" hidden>
-            <p>ストリートビューは Google マップで開けます。</p>
+            <p id="map-fallback-text">ストリートビューは Google マップで開けます。</p>
             <a class="btn btn-ghost" id="map-fallback-link" target="_blank" rel="noopener">ストリートビューを開く</a>
           </div>
         </div>
-        <a class="map-open" id="map-open" target="_blank" rel="noopener">Google マップで大きく見る</a>
+        <p class="map-links">
+          <a class="map-open" id="map-open" target="_blank" rel="noopener">Google マップで大きく見る</a>
+          <a class="map-open" href="#compare">思い出の写真と見比べる</a>
+        </p>
       </div>
 
       <div class="guide">
@@ -261,9 +276,70 @@
         <div class="arrival-actions">
           <button type="button" class="btn btn-primary" id="btn-new-flight">別の場所へ飛ぶ</button>
           <button type="button" class="btn btn-ghost" id="btn-refly">もう一度この空を飛ぶ</button>
+          <button type="button" class="btn btn-ghost" id="btn-save-place" aria-pressed="false">思い出の場所に登録</button>
         </div>
+        <p class="msg" id="save-place-msg" role="status" aria-live="polite"></p>
       </div>
     </div>
+
+    <!-- 思い出の写真と見比べる -->
+    <section class="compare" id="compare" aria-labelledby="compare-title">
+      <div class="compare-head">
+        <h2 class="h2" id="compare-title">思い出の写真と見比べる</h2>
+        <div class="seg" role="tablist" aria-label="見比べ方">
+          <button type="button" class="seg-btn" role="tab" data-cmp="side" aria-selected="true">並べて見る</button>
+          <button type="button" class="seg-btn" role="tab" data-cmp="overlay" aria-selected="false">重ねて見る</button>
+        </div>
+      </div>
+
+      <div class="compare-stage" id="compare-stage" data-mode="side">
+        <figure class="cmp-pane cmp-now">
+          <div class="cmp-view" id="cmp-now-view"></div>
+          <figcaption class="cmp-label" id="cmp-now-label">今</figcaption>
+        </figure>
+        <figure class="cmp-pane cmp-then">
+          <img id="cmp-photo" alt="" hidden>
+          <div class="cmp-empty" id="cmp-empty">思い出の写真を登録すると、ここに表示されます。</div>
+          <figcaption class="cmp-label">思い出</figcaption>
+        </figure>
+      </div>
+
+      <label class="cmp-opacity" id="cmp-opacity-wrap" hidden>
+        <span>思い出の写真の濃さ</span>
+        <input type="range" id="cmp-opacity" min="0" max="1" step="0.05" value="0.55">
+      </label>
+      <p class="cmp-hint">ストリートビューはドラッグで向きを変えられます。写真を撮ったときと同じ方向に合わせると、違いがよくわかります。</p>
+
+      <div class="photo-info" id="photo-info" hidden>
+        <p class="photo-caption" id="photo-caption"></p>
+        <button type="button" class="link-danger" id="btn-photo-delete">この写真を削除</button>
+      </div>
+
+      <div class="photo-strip" id="photo-strip" aria-label="登録した思い出の写真"></div>
+
+      <form class="photo-form" id="form-photo" novalidate>
+        <input type="file" id="photo-file" accept="image/*" hidden>
+        <div class="photo-preview" id="photo-preview" hidden>
+          <img id="photo-preview-img" alt="登録する写真のプレビュー">
+          <div class="photo-preview-fields">
+            <label class="field">
+              <span>ひとこと（任意）</span>
+              <input type="text" name="caption" maxlength="100" placeholder="例：小学3年の夏、父と釣りに来た日">
+            </label>
+            <label class="field">
+              <span>撮った時期（任意）</span>
+              <input type="text" name="era" maxlength="30" placeholder="例：1985年ごろ">
+            </label>
+            <p class="form-note" id="photo-size-note"></p>
+            <div class="photo-actions">
+              <button type="submit" class="btn btn-primary">この写真を登録</button>
+              <button type="button" class="btn btn-ghost" id="btn-photo-cancel">やめる</button>
+            </div>
+          </div>
+        </div>
+        <p class="msg" id="photo-msg" role="status" aria-live="polite"></p>
+      </form>
+    </section>
   </section>
 </main>
 

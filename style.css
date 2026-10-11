@@ -1,4 +1,4 @@
-/* あの場所は今 ― イーグル隊長の空中散歩  style.css v1.0.0 */
+/* あの場所は今 ― イーグル隊長の空中散歩  style.css v1.3.0 */
 
 :root {
   --sky-deep: #17406B;
@@ -215,8 +215,17 @@ body[data-view="arrival"] .footer { padding-bottom: 130px; }
 .btn-board { width: 100%; font-size: 1.15rem; min-height: 60px; }
 .stub-hint { margin: -6px 0 0; text-align: center; font-size: .82rem; color: var(--muted); }
 
-/* 履歴 */
-.history { margin-top: 44px; }
+/* 思い出の場所・最近のフライト */
+.history { margin-top: 36px; }
+#history-msg { margin-top: 24px; }
+.history-note { margin: -6px 0 12px; font-size: .9rem; color: var(--muted); }
+.history-item.is-saved { border-left-color: var(--beak); }
+.item-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.badge { font-size: .8rem; font-weight: 700; color: var(--feather); background: #FFF1D2; border-radius: 999px; padding: 0 10px; }
+.item-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.history-item .item-actions .btn { margin-top: 0; min-height: 40px; padding: 4px 14px; font-size: .9rem; }
+.item-actions .link-danger { margin-left: auto; }
+#btn-save-place[aria-pressed="true"] { background: #FFF1D2; border-color: var(--beak); color: var(--feather); }
 .history-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
 .history-item {
   display: flex; flex-direction: column; gap: 6px;
@@ -225,7 +234,6 @@ body[data-view="arrival"] .footer { padding-bottom: 130px; }
 }
 .history-item strong { font-size: 1.08rem; }
 .history-item .meta { font-size: .88rem; color: var(--muted); line-height: 1.5; }
-.history-item .btn { align-self: flex-start; min-height: 42px; padding: 6px 18px; font-size: .95rem; margin-top: 6px; }
 .empty, .muted { color: var(--muted); }
 
 /* ---------- フライト ---------- */
@@ -238,6 +246,20 @@ body[data-view="arrival"] .footer { padding-bottom: 130px; }
 }
 .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
 .stage.no-video video { visibility: hidden; }
+
+/* 3D地図（現在地 → 思い出の場所） */
+.earth3d { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.earth3d gmp-map-3d { display: block; width: 100%; height: 100%; }
+.stage.mode-3d video { display: none; }
+.stage.mode-video .earth3d { display: none; }
+
+/* 着陸後のストリートビュー */
+.stage-pano {
+  position: absolute; inset: 0; z-index: 2;
+  opacity: 0; pointer-events: none; transition: opacity 1.4s ease;
+}
+.stage.landed .stage-pano { opacity: 1; pointer-events: auto; }
+.stage.landed .sky-fallback { display: none; }
 
 .sky-fallback {
   position: absolute; inset: 0; z-index: 0;
@@ -275,7 +297,7 @@ body[data-view="arrival"] .footer { padding-bottom: 130px; }
 
 /* 鷲：画面上部で相棒（カメラ）をつかんでいる */
 .eagle-rig {
-  position: absolute; z-index: 2; top: 3%; left: 50%;
+  position: absolute; z-index: 3; top: 3%; left: 50%;
   width: clamp(160px, 24vw, 290px);
   transform: translateX(-50%);
   transition: transform .8s ease;
@@ -286,6 +308,10 @@ body[data-view="arrival"] .footer { padding-bottom: 130px; }
 .stage[data-phase="cruise"] .wing-g { animation-duration: 2.6s; }
 .stage[data-phase="dive"] .eagle-rig { transform: translateX(-50%) rotate(9deg) scale(.92); }
 .stage[data-phase="dive"] .wing-g { animation: none; transform: rotate(16deg); }
+.stage[data-phase="landed"] .eagle-rig { transform: translateX(-50%) scale(.72); }
+.stage[data-phase="landed"] .wing-g { animation-duration: 3.4s; }
+.stage.landed .eagle-rig, .stage.landed .bubble, .stage.landed .telop { pointer-events: none; }
+.hud-from:empty { display: none; }
 
 .bubble {
   position: absolute; z-index: 3; top: 5%;
@@ -342,9 +368,11 @@ body[data-view="arrival"] .footer { padding-bottom: 130px; }
   background: var(--sky-pale); box-shadow: var(--shadow);
 }
 .map-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.map-pano { position: absolute; inset: 0; }
 .map-fallback { position: absolute; inset: 0; display: grid; place-content: center; gap: 12px; text-align: center; padding: 20px; }
 .map-fallback p { margin: 0; }
-.map-open { display: inline-block; margin-top: 10px; font-size: .92rem; }
+.map-links { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 10px 0 0; }
+.map-open { display: inline-block; font-size: .92rem; }
 
 .guide { display: flex; flex-direction: column; gap: 10px; }
 .guide-captain { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: start; margin-bottom: 6px; }
@@ -371,6 +399,75 @@ body[data-view="arrival"] .footer { padding-bottom: 130px; }
 .sources ul { margin: 4px 0 0; padding-left: 1.2em; font-size: .88rem; line-height: 1.6; }
 .ai-note { margin: 0; padding: 0 16px; font-size: .82rem; color: var(--muted); }
 .arrival-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; padding: 0 4px; }
+
+/* ---------- 思い出の写真と見比べる ---------- */
+.compare { margin-top: 48px; scroll-margin-top: 16px; }
+.compare-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 14px; }
+.compare-head .h2 { margin: 0; }
+.seg { display: inline-flex; gap: 4px; padding: 4px; background: #fff; border: 2px solid var(--sky-pale); border-radius: 999px; }
+.seg-btn { border: 0; background: transparent; border-radius: 999px; padding: 6px 18px; font-weight: 700; font-size: .95rem; color: var(--muted); cursor: pointer; }
+.seg-btn[aria-selected="true"] { background: var(--sky-deep); color: #fff; }
+
+.compare-stage { --photo-opacity: .55; }
+.compare-stage[data-mode="side"] { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.cmp-pane {
+  position: relative; margin: 0; aspect-ratio: 4 / 3;
+  border-radius: var(--radius-l); overflow: hidden;
+  background: #22364D; box-shadow: var(--shadow);
+}
+.cmp-view { position: absolute; inset: 0; }
+.cmp-view iframe { width: 100%; height: 100%; border: 0; display: block; }
+.cmp-then img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.cmp-empty { position: absolute; inset: 0; display: grid; place-content: center; padding: 24px; text-align: center; color: #DCE8F3; }
+.cmp-label {
+  position: absolute; left: 12px; top: 12px; z-index: 2;
+  background: var(--beak); color: var(--ink); font-weight: 700; font-size: .9rem;
+  border-radius: 999px; padding: 0 12px; pointer-events: none;
+}
+
+.compare-stage[data-mode="overlay"] { position: relative; aspect-ratio: 4 / 3; max-width: 900px; }
+.compare-stage[data-mode="overlay"] .cmp-pane { position: absolute; inset: 0; aspect-ratio: auto; }
+.compare-stage[data-mode="overlay"] .cmp-then {
+  background: transparent; box-shadow: none; pointer-events: none; opacity: var(--photo-opacity);
+}
+.compare-stage[data-mode="overlay"] .cmp-then img { object-fit: cover; }
+.compare-stage[data-mode="overlay"] .cmp-empty,
+.compare-stage[data-mode="overlay"] .cmp-label { display: none; }
+
+.cmp-opacity { display: flex; align-items: center; gap: 12px; margin-top: 12px; font-weight: 700; color: var(--sky-deep); }
+.cmp-opacity input { width: min(320px, 60vw); accent-color: var(--sky-deep); }
+.cmp-hint { margin: 8px 0 0; font-size: .88rem; color: var(--muted); }
+
+.photo-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin-top: 12px; }
+.photo-caption { margin: 0; font-weight: 700; }
+.link-danger { background: none; border: 0; padding: 4px 0; color: #B3261E; text-decoration: underline; cursor: pointer; font-size: .9rem; }
+
+.photo-strip { display: flex; gap: 10px; overflow-x: auto; padding: 14px 2px 8px; }
+.photo-thumb {
+  flex: 0 0 auto; width: 104px; height: 78px; padding: 0;
+  border: 3px solid transparent; border-radius: 12px; overflow: hidden; background: #C9D7E4; cursor: pointer;
+}
+.photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-thumb[aria-pressed="true"] { border-color: var(--beak); }
+.photo-add {
+  flex: 0 0 auto; width: 104px; height: 78px;
+  border: 2px dashed var(--sky); border-radius: 12px; background: #fff;
+  color: var(--sky-deep); font-weight: 700; font-size: .88rem; line-height: 1.35; cursor: pointer;
+}
+.photo-add:hover { background: var(--sky-pale); }
+
+.photo-preview {
+  display: grid; grid-template-columns: 220px 1fr; gap: 20px; margin-top: 10px;
+  background: #fff; border-radius: var(--radius-l); padding: 18px; box-shadow: var(--shadow);
+}
+.photo-preview img { width: 100%; border-radius: 12px; display: block; }
+.photo-preview-fields { display: flex; flex-direction: column; gap: 12px; }
+.photo-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+
+@media (max-width: 720px) {
+  .compare-stage[data-mode="side"] { grid-template-columns: 1fr; }
+  .photo-preview { grid-template-columns: 1fr; }
+}
 
 /* ---------- 音声コントローラー ---------- */
 .voicebar {

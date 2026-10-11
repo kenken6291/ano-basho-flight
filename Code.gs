@@ -1,6 +1,6 @@
 /**
  * あの場所は今 ― イーグル隊長の空中散歩
- * Code.gs（Google Apps Script） v1.0.0
+ * Code.gs（Google Apps Script） v1.3.0
  *
  * ■ スクリプトプロパティ（プロジェクトの設定 → スクリプト プロパティ）
  *   GEMINI_API_KEY      （必須）Gemini API キー
@@ -10,20 +10,27 @@
  *   GEMINI_MODEL        （任意）既定: gemini-2.5-flash
  *   GEMINI_TTS_MODEL    （任意）既定: gemini-2.5-flash-preview-tts
  *   TTS_VOICE           （任意）既定: Puck（陽気）。Fenrir（勢い）/ Charon（渋め）なども可
- *   TTS_STYLE           （任意）読み上げスタイルの指示文（下の既定値参照）
  *   USE_SEARCH          （任意）true/false 既定: true（Google検索グラウンディング）
  *   DAILY_FLIGHT_LIMIT  （任意）1人あたりのフライト生成回数/日 既定: 20
  *   DAILY_TTS_LIMIT     （任意）1人あたりの音声生成回数/日 既定: 300
+ *   DAILY_PHOTO_LIMIT   （任意）1人あたりの写真登録枚数/日 既定: 30
+ *   PHOTO_FOLDER_ID     （自動）思い出の写真を保存するDriveフォルダ。setup() で自動作成
  *
  * ■ 重要：コードを変更したら「デプロイを管理 → 編集 → バージョン：新バージョン」で再デプロイ
  */
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.3.0';
 
 const SHEET_MEMBERS = 'members';
 const SHEET_FLIGHTS = 'flights';
+const SHEET_PHOTOS = 'photos';
 const MEMBER_HEADERS = ['email', 'nickname', 'salt', 'hash', 'mustChange', 'failCount', 'lockUntil', 'createdAt', 'lastLogin'];
-const FLIGHT_HEADERS = ['timestamp', 'email', 'query', 'address', 'lat', 'lng', 'era', 'memory', 'placeName', 'planJson'];
+const FLIGHT_HEADERS = ['timestamp', 'email', 'query', 'address', 'lat', 'lng', 'era', 'memory', 'placeName', 'planJson', 'id', 'saved'];
+const PHOTO_HEADERS = ['id', 'email', 'placeKey', 'placeName', 'fileId', 'thumb', 'caption', 'era', 'width', 'height', 'createdAt'];
+const SHEET_HEADERS = {};
+SHEET_HEADERS[SHEET_MEMBERS] = MEMBER_HEADERS;
+SHEET_HEADERS[SHEET_FLIGHTS] = FLIGHT_HEADERS;
+SHEET_HEADERS[SHEET_PHOTOS] = PHOTO_HEADERS;
 const M = {};
 MEMBER_HEADERS.forEach(function (h, i) { M[h] = i; });
 
@@ -32,9 +39,9 @@ const LOCK_LIMIT = 5;        // 連続失敗回数
 const LOCK_MINUTES = 15;     // ロック時間
 const HASH_ROUNDS = 500;     // ストレッチング回数
 
-const DEFAULT_TTS_STYLE =
-  'Read the following Japanese line aloud as a cheerful, lively, confident and slightly cocky eagle tour guide. ' +
-  'Speak a little fast with energy and a warm smile in the voice:';
+const MAX_PHOTOS_PER_PLACE = 20;   // 1か所あたりの登録枚数
+const MAX_IMAGE_B64 = 4000000;     // 本体（base64）約3MBまで
+const MAX_THUMB_B64 = 45000;       // サムネイル（セルの上限5万文字未満）
 
 /* =========================================================
  *  イーグル隊長 システムプロンプト
@@ -96,7 +103,11 @@ function doPost(e) {
   try {
     const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     const pub = { register: register_, login: login_, forgotPassword: forgotPassword_, logout: logout_ };
-    const priv = { verify: verify_, changePassword: changePassword_, planFlight: planFlight_, tts: tts_, history: history_ };
+    const priv = {
+      verify: verify_, changePassword: changePassword_, planFlight: planFlight_, tts: tts_, history: history_,
+      listPhotos: listPhotos_, uploadPhoto: uploadPhoto_, getPhoto: getPhoto_, deletePhoto: deletePhoto_,
+      savePlace: savePlace_, deleteFlight: deleteFlight_
+    };
 
     if (pub[req.action]) {
       return json_(Object.assign({ ok: true, version: APP_VERSION }, pub[req.action](req)));
@@ -244,6 +255,7 @@ function planFlight_(req, user) {
   });
 
   const plan = {
+    id: Utilities.getUuid(),
     place: { query: query, address: geo.address, lat: geo.lat, lng: geo.lng },
     era: era,
     memory: memory,
@@ -255,7 +267,8 @@ function planFlight_(req, user) {
   try {
     sheet_(SHEET_FLIGHTS).appendRow([
       new Date(), user.email, safe_(query), safe_(geo.address), geo.lat, geo.lng,
-      safe_(era), safe_(memory), safe_(plan.script.placeName), JSON.stringify(plan)
+      safe_(era), safe_(memory), safe_(plan.script.placeName), JSON.stringify(plan),
+      plan.id, false
     ]);
   } catch (e) { console.error(e); }
 
@@ -368,10 +381,10 @@ function tts_(req, user) {
   if (!key) throw err_('サーバーの設定（GEMINI_API_KEY）が未完了です', 'CONFIG');
   const model = prop_('GEMINI_TTS_MODEL', 'gemini-2.5-flash-preview-tts');
   const voice = prop_('TTS_VOICE', 'Puck');
-  const style = prop_('TTS_STYLE', DEFAULT_TTS_STYLE);
 
+  // セリフ本文だけを送る（指示文を付けると、それごと読み上げられてしまうため）
   const body = {
-    contents: [{ parts: [{ text: style + '\n' + text }] }],
+    contents: [{ parts: [{ text: text }] }],
     generationConfig: {
       responseModalities: ['AUDIO'],
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
@@ -398,22 +411,217 @@ function tts_(req, user) {
 /* =========================================================
  *  フライト履歴
  * ========================================================= */
+// 思い出の場所（登録済み）はすべて、最近のフライトは30件まで返す
 function history_(req, user) {
   const sh = sheet_(SHEET_FLIGHTS);
   const last = sh.getLastRow();
   if (last < 2) return { items: [] };
-  const start = Math.max(2, last - 999);
-  const vals = sh.getRange(start, 1, last - start + 1, FLIGHT_HEADERS.length).getValues();
+  const vals = sh.getRange(2, 1, last - 1, FLIGHT_HEADERS.length).getValues();
+  const counts = photoCounts_(user.email);
   const items = [];
-  for (let i = vals.length - 1; i >= 0 && items.length < 20; i--) {
+  let recent = 0;
+  for (let i = vals.length - 1; i >= 0; i--) {
     const v = vals[i];
     if (String(v[1]).toLowerCase() !== user.email) continue;
+    const saved = isTrue_(v[11]);
+    if (!saved && recent >= 30) continue;
     let plan = null;
     try { plan = JSON.parse(v[9]); } catch (e) { plan = null; }
-    if (!plan) continue;
-    items.push({ date: Utilities.formatDate(new Date(v[0]), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm'), plan: plan });
+    if (!plan || !plan.place) continue;
+    let id = String(v[10] || '');
+    if (!id) { // 旧バージョンの記録にIDを付ける
+      id = Utilities.getUuid();
+      sh.getRange(i + 2, 11).setValue(id);
+    }
+    plan.id = id;
+    if (!saved) recent++;
+    let key = '';
+    try { key = placeKey_(plan.place.lat, plan.place.lng); } catch (e) { key = ''; }
+    items.push({
+      id: id,
+      saved: saved,
+      date: Utilities.formatDate(new Date(v[0]), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm'),
+      photoCount: counts[key] || 0,
+      plan: plan
+    });
   }
   return { items: items };
+}
+
+function findFlight_(id, email) {
+  if (!id) return null;
+  const sh = sheet_(SHEET_FLIGHTS);
+  const last = sh.getLastRow();
+  if (last < 2) return null;
+  const vals = sh.getRange(2, 1, last - 1, FLIGHT_HEADERS.length).getValues();
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][10]) === String(id)) {
+      if (String(vals[i][1]).toLowerCase() !== email) throw err_('この記録を操作する権限がありません');
+      return { row: i + 2, v: vals[i] };
+    }
+  }
+  return null;
+}
+
+// 思い出の場所に登録／登録を外す
+function savePlace_(req, user) {
+  const saved = req.saved !== false;
+  return withLock_(function () {
+    const m = findFlight_(req.id, user.email);
+    if (!m) throw err_('フライトの記録が見つかりません', 'NOT_FOUND');
+    sheet_(SHEET_FLIGHTS).getRange(m.row, 12).setValue(saved);
+    return { saved: saved, message: saved ? '思い出の場所に登録しました' : '思い出の場所から外しました' };
+  });
+}
+
+// フライトの記録を削除（必要なら、その場所の写真も削除）
+function deleteFlight_(req, user) {
+  return withLock_(function () {
+    const m = findFlight_(req.id, user.email);
+    if (!m) throw err_('フライトの記録が見つかりません', 'NOT_FOUND');
+    let key = '';
+    try { key = placeKey_(m.v[4], m.v[5]); } catch (e) { key = ''; }
+    sheet_(SHEET_FLIGHTS).deleteRow(m.row);
+    let removed = 0;
+    if (req.deletePhotos && key) removed = deletePhotosByPlace_(user.email, key);
+    return { message: removed ? '記録と写真' + removed + '枚を削除しました' : '記録を削除しました', removedPhotos: removed };
+  });
+}
+
+/* =========================================================
+ *  思い出の写真
+ * ========================================================= */
+function placeKey_(lat, lng) {
+  const a = Number(lat), b = Number(lng);
+  if (!isFinite(a) || !isFinite(b)) throw err_('場所の情報が正しくありません');
+  return 'p' + a.toFixed(4) + '_' + b.toFixed(4);
+}
+
+function photoFolder_() {
+  const id = prop_('PHOTO_FOLDER_ID', '');
+  if (id) {
+    try { return DriveApp.getFolderById(id); } catch (e) { console.warn('PHOTO_FOLDER_ID のフォルダが見つかりません。作り直します'); }
+  }
+  const f = DriveApp.createFolder('ano-basho-flight 思い出の写真');
+  PropertiesService.getScriptProperties().setProperty('PHOTO_FOLDER_ID', f.getId());
+  return f;
+}
+
+function photoCounts_(email) {
+  const sh = sheet_(SHEET_PHOTOS);
+  const last = sh.getLastRow();
+  const counts = {};
+  if (last < 2) return counts;
+  sh.getRange(2, 1, last - 1, 3).getValues().forEach(function (v) {
+    if (String(v[1]).toLowerCase() === email) counts[String(v[2])] = (counts[String(v[2])] || 0) + 1;
+  });
+  return counts;
+}
+
+function deletePhotosByPlace_(email, key) {
+  const sh = sheet_(SHEET_PHOTOS);
+  const last = sh.getLastRow();
+  if (last < 2) return 0;
+  const vals = sh.getRange(2, 1, last - 1, PHOTO_HEADERS.length).getValues();
+  let n = 0;
+  for (let i = vals.length - 1; i >= 0; i--) { // 下の行から削除
+    const v = vals[i];
+    if (String(v[1]).toLowerCase() !== email || String(v[2]) !== key) continue;
+    try { DriveApp.getFileById(String(v[4])).setTrashed(true); } catch (e) { console.warn(e); }
+    sh.deleteRow(i + 2);
+    n++;
+  }
+  return n;
+}
+
+function photoOut_(v) {
+  return {
+    id: String(v[0]),
+    thumb: String(v[5] || ''),
+    caption: String(v[6] || ''),
+    era: String(v[7] || ''),
+    width: Number(v[8]) || 0,
+    height: Number(v[9]) || 0,
+    createdAt: v[10] ? Utilities.formatDate(new Date(v[10]), 'Asia/Tokyo', 'yyyy/MM/dd') : ''
+  };
+}
+
+function findPhoto_(id, email) {
+  const sh = sheet_(SHEET_PHOTOS);
+  const last = sh.getLastRow();
+  if (last < 2) return null;
+  const vals = sh.getRange(2, 1, last - 1, PHOTO_HEADERS.length).getValues();
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]) === String(id)) {
+      if (String(vals[i][1]).toLowerCase() !== email) throw err_('この写真を操作する権限がありません');
+      return { row: i + 2, v: vals[i] };
+    }
+  }
+  return null;
+}
+
+function listPhotos_(req, user) {
+  const key = placeKey_(req.lat, req.lng);
+  const sh = sheet_(SHEET_PHOTOS);
+  const last = sh.getLastRow();
+  if (last < 2) return { photos: [] };
+  const vals = sh.getRange(2, 1, last - 1, PHOTO_HEADERS.length).getValues();
+  const photos = vals
+    .filter(function (v) { return String(v[1]).toLowerCase() === user.email && String(v[2]) === key; })
+    .map(photoOut_);
+  return { photos: photos };
+}
+
+function uploadPhoto_(req, user) {
+  const key = placeKey_(req.lat, req.lng);
+  const image = String(req.image || '');
+  if (!image) throw err_('写真のデータがありません');
+  if (image.length > MAX_IMAGE_B64) throw err_('写真のサイズが大きすぎます');
+  const bytes = Utilities.base64Decode(image);
+  if (bytes.length < 4 || bytes[0] !== -1 || bytes[1] !== -40) throw err_('JPEG形式の写真ではありません');
+  let thumb = String(req.thumb || '');
+  if (thumb.length > MAX_THUMB_B64 || !/^[A-Za-z0-9+/=]+$/.test(thumb)) thumb = '';
+
+  countDaily_('ph', user.email, Number(prop_('DAILY_PHOTO_LIMIT', '30')), '今日の写真登録の上限に達しました。また明日登録してください');
+
+  return withLock_(function () {
+    const sh = sheet_(SHEET_PHOTOS);
+    const last = sh.getLastRow();
+    if (last >= 2) {
+      const n = sh.getRange(2, 1, last - 1, 3).getValues()
+        .filter(function (v) { return String(v[1]).toLowerCase() === user.email && String(v[2]) === key; }).length;
+      if (n >= MAX_PHOTOS_PER_PLACE) throw err_('この場所に登録できる写真は' + MAX_PHOTOS_PER_PLACE + '枚までです');
+    }
+    const id = Utilities.getUuid();
+    const file = photoFolder_().createFile(Utilities.newBlob(bytes, 'image/jpeg', id + '.jpg'));
+    const row = [
+      id, user.email, key,
+      safe_(String(req.placeName || '').slice(0, 50)),
+      file.getId(), thumb,
+      safe_(String(req.caption || '').trim().slice(0, 100)),
+      safe_(String(req.era || '').trim().slice(0, 30)),
+      Number(req.width) || '', Number(req.height) || '', new Date()
+    ];
+    sh.appendRow(row);
+    return { photo: photoOut_(row), message: '写真を登録しました' };
+  });
+}
+
+function getPhoto_(req, user) {
+  const m = findPhoto_(req.id, user.email);
+  if (!m) throw err_('写真が見つかりません', 'NOT_FOUND');
+  const blob = DriveApp.getFileById(String(m.v[4])).getBlob();
+  return { image: Utilities.base64Encode(blob.getBytes()), mimeType: blob.getContentType() || 'image/jpeg' };
+}
+
+function deletePhoto_(req, user) {
+  return withLock_(function () {
+    const m = findPhoto_(req.id, user.email);
+    if (!m) throw err_('写真が見つかりません', 'NOT_FOUND');
+    try { DriveApp.getFileById(String(m.v[4])).setTrashed(true); } catch (e) { console.warn(e); }
+    sheet_(SHEET_PHOTOS).deleteRow(m.row);
+    return { message: '写真を削除しました' };
+  });
 }
 
 /* =========================================================
@@ -441,9 +649,13 @@ function sheet_(name) {
   let sh = ss.getSheetByName(name);
   if (!sh) {
     sh = ss.insertSheet(name);
-    const headers = name === SHEET_MEMBERS ? MEMBER_HEADERS : FLIGHT_HEADERS;
+    const headers = SHEET_HEADERS[name];
     sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
     sh.setFrozenRows(1);
+  } else if (sh.getLastColumn() < SHEET_HEADERS[name].length) {
+    // 列が増えたときは見出しを追加
+    const headers2 = SHEET_HEADERS[name];
+    sh.getRange(1, 1, 1, headers2.length).setValues([headers2]).setFontWeight('bold');
   }
   return sh;
 }
@@ -526,6 +738,8 @@ function sendTempMail_(email, nickname, temp, lead) {
 function setup() {
   sheet_(SHEET_MEMBERS);
   sheet_(SHEET_FLIGHTS);
+  sheet_(SHEET_PHOTOS);
+  console.log('写真フォルダ: ' + photoFolder_().getName());
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('PEPPER')) {
     props.setProperty('PEPPER', Utilities.getUuid() + Utilities.getUuid());
