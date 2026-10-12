@@ -1,4 +1,4 @@
-/* あの場所は今 ― イーグル隊長の空中散歩  style.css v1.3.0 */
+/* あの場所は今 ― イーグル隊長の空中散歩  style.css v1.5.0 */
 
 :root {
   --sky-deep: #17406B;
@@ -486,6 +486,7 @@ body[data-view="arrival"] .footer { padding-bottom: 130px; }
 #btn-play { background: var(--sky-deep); color: #fff; min-width: 108px; }
 .vb-range { display: flex; align-items: center; gap: 6px; font-size: .88rem; font-weight: 700; color: var(--muted); }
 .vb-range input { width: 96px; accent-color: var(--sky-deep); }
+.vb-note { flex-basis: 100%; margin: 0; text-align: center; font-size: .8rem; color: var(--muted); }
 
 /* ---------- レスポンシブ ---------- */
 @media (max-width: 860px) {

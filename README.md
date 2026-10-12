@@ -1,4 +1,4 @@
-# あの場所は今 ― イーグル隊長の空中散歩（ano-basho-flight） v1.3.0
+# あの場所は今 ― イーグル隊長の空中散歩（ano-basho-flight） v1.5.0
 
 行き先を入力すると、陽気な鷲「イーグル隊長」の足につかまって上空を飛び、
 目的地に舞い降りて「昔と今」を音声で案内してくれる Web アプリです。
@@ -10,13 +10,31 @@ ano-basho-flight/
 ├─ index.html          画面（認証・搭乗券・フライト・到着）
 ├─ style.css           デザイン
 ├─ app.js              認証・フライト演出・音声・地図
-├─ config.js           設定（GAS URL、Maps キー、映像・効果音）
+├─ config.js           設定（GAS URL、3D地図・写真・映像・効果音）
 ├─ Code.gs             GAS バックエンド（認証・Gemini台本・Gemini TTS・履歴）
 ├─ .github/workflows/deploy.yml   Secrets から config.js を生成してデプロイ
 └─ assets/             ※自分で用意（下記参照）
    ├─ video/ takeoff.mp4  cruise.mp4  dive.mp4
    └─ se/    eagle-cry.mp3  wind-loop.mp3  whoosh.mp3
 ```
+
+## v1.5.0：AI音声（Gemini TTS）の回数を節約
+
+Gemini TTS は無料枠だと「1モデルあたり1日100回」などの上限があり、超えると 429 エラーになります。
+
+- **音声キャッシュ**：一度作ったセリフの音声を Drive の「ano-basho-flight 音声キャッシュ」に保存し、同じセリフは API を呼ばずに再利用（定番セリフ・「見る」・「もう一度飛ぶ」は2回目から0回）
+- **解説をまとめて1回に**：到着後の解説（昔の面影〜締め）を1つの音声にまとめ、読んでいる段落の強調表示は再生位置から計算。「次へ」で次の段落へ移動
+- **上限に達したとき**：GAS が「再試行までの時間」を覚えて、その間は API を呼ばずにすぐブラウザの声に切り替え（画面下に案内表示）
+- 新しい場所への1フライトで使う AI 音声は約7回（離陸1・巡航3・急降下1・到着1・解説1）
+- モデルを変えた直後などにすぐ AI 音声を試したいときは、エディタで `clearTtsQuotaBlock` を実行
+- 音声キャッシュのフォルダは、容量が気になったら中身を削除してかまいません（次回作り直されます）
+
+## v1.4.0：Maps APIキーをスクリプトプロパティへ移動
+
+- Google Maps APIキーは config.js から削除し、GAS のスクリプトプロパティ `GOOGLE_MAPS_API_KEY` に設定します
+- ログイン後、アプリが GAS（`mapsKey`）からキーを受け取って地図を表示します。GitHub のリポジトリにキーが残りません
+- 地図はブラウザで表示する仕組みのため、キー自体はブラウザには届きます。不正利用の防止は、引き続き APIキーの **HTTP リファラー制限**（`https://kenken6291.github.io/*`）で行います
+- GitHub Actions の Secrets `GOOGLE_MAPS_API_KEY` は不要になりました
 
 ## v1.3.0：思い出の場所の登録・表示・削除
 
@@ -91,6 +109,7 @@ Google Earth Studio は、ブラウザで手作業で映像を作って書き出
    | キー | 値 |
    |---|---|
    | `GEMINI_API_KEY` | Gemini API キー（必須） |
+   | `GOOGLE_MAPS_API_KEY` | Google Maps API キー（必須。リファラー制限を付けたもの） |
    | `APP_URL` | `https://kenken6291.github.io/ano-basho-flight/` |
    | `GEMINI_MODEL` | 任意（既定 `gemini-2.5-flash`） |
    | `GEMINI_TTS_MODEL` | 任意（既定 `gemini-2.5-flash-preview-tts`）※普段使っているTTSモデル名に合わせてください |
@@ -107,7 +126,7 @@ Google Earth Studio は、ブラウザで手作業で映像を作って書き出
 > ⚠️ **Code.gs を変更したら、必ず「デプロイを管理」→ 鉛筆アイコン → バージョン「新バージョン」で再デプロイ。**
 > 保存しただけでは公開中の /exec に反映されません。フッターの「サーバー v○○」で反映を確認できます。
 
-### 2. Google Maps Embed API キー（任意・推奨）
+### 2. Google Maps API キー（スクリプトプロパティ `GOOGLE_MAPS_API_KEY` に設定）
 
 - Google Cloud Console で **Maps Embed API** を有効化してキーを作成
 - アプリケーションの制限：HTTP リファラー `https://kenken6291.github.io/*`
@@ -121,7 +140,6 @@ Google Earth Studio は、ブラウザで手作業で映像を作って書き出
 2. Settings → Pages → Source を **GitHub Actions** に
 3. Settings → Secrets and variables → Actions に追加
    - `GAS_API_URL` … GAS の `/exec` URL
-   - `GOOGLE_MAPS_API_KEY` … Embed API キー（無ければ未登録で可）
 4. push すると `deploy.yml` が config.js のプレースホルダーを置き換えて公開
 
 Actions を使わない場合は config.js の `__GAS_API_URL__` などを直接書き換えて push してください。

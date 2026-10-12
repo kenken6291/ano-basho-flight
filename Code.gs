@@ -1,9 +1,10 @@
 /**
  * あの場所は今 ― イーグル隊長の空中散歩
- * Code.gs（Google Apps Script） v1.3.0
+ * Code.gs（Google Apps Script） v1.5.0
  *
  * ■ スクリプトプロパティ（プロジェクトの設定 → スクリプト プロパティ）
  *   GEMINI_API_KEY      （必須）Gemini API キー
+ *   GOOGLE_MAPS_API_KEY （必須）Google Maps API キー（3D地図・ストリートビュー・地図表示用）
  *   APP_URL             （推奨）例: https://kenken6291.github.io/ano-basho-flight/
  *   PEPPER              （自動）setup() 実行時に自動生成。絶対に変更しないこと
  *   SPREADSHEET_ID      （任意）未設定ならコンテナバインドのスプレッドシートを使用
@@ -15,11 +16,12 @@
  *   DAILY_TTS_LIMIT     （任意）1人あたりの音声生成回数/日 既定: 300
  *   DAILY_PHOTO_LIMIT   （任意）1人あたりの写真登録枚数/日 既定: 30
  *   PHOTO_FOLDER_ID     （自動）思い出の写真を保存するDriveフォルダ。setup() で自動作成
+ *   TTS_CACHE_FOLDER_ID （自動）生成した音声のキャッシュ用Driveフォルダ（同じセリフはAPIを呼ばずに再利用）
  *
  * ■ 重要：コードを変更したら「デプロイを管理 → 編集 → バージョン：新バージョン」で再デプロイ
  */
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.5.0';
 
 const SHEET_MEMBERS = 'members';
 const SHEET_FLIGHTS = 'flights';
@@ -106,7 +108,8 @@ function doPost(e) {
     const priv = {
       verify: verify_, changePassword: changePassword_, planFlight: planFlight_, tts: tts_, history: history_,
       listPhotos: listPhotos_, uploadPhoto: uploadPhoto_, getPhoto: getPhoto_, deletePhoto: deletePhoto_,
-      savePlace: savePlace_, deleteFlight: deleteFlight_
+      savePlace: savePlace_, deleteFlight: deleteFlight_,
+      mapsKey: mapsKey_
     };
 
     if (pub[req.action]) {
@@ -219,6 +222,12 @@ function forgotPassword_(req) {
 function logout_(req) {
   if (req.token) CacheService.getScriptCache().remove('s_' + req.token);
   return { message: 'ログアウトしました' };
+}
+
+// Maps APIキーをログイン中の会員にだけ渡す
+// ※地図はブラウザで表示するため、キー自体はブラウザに届きます。保護は HTTP リファラー制限で行います
+function mapsKey_(req, user) {
+  return { key: prop_('GOOGLE_MAPS_API_KEY', '') };
 }
 
 function verify_(req, user) {
@@ -373,14 +382,29 @@ function parseJson_(text) {
  *  音声合成（Gemini TTS）
  * ========================================================= */
 function tts_(req, user) {
-  const text = String(req.text || '').trim().slice(0, 400);
+  const text = String(req.text || '').trim().slice(0, 1500);
   if (!text) throw err_('読み上げる文がありません');
+
+  const model = prop_('GEMINI_TTS_MODEL', 'gemini-2.5-flash-preview-tts');
+  const voice = prop_('TTS_VOICE', 'Puck');
+
+  // 1) 同じセリフを前に作っていれば、Drive のキャッシュから返す（API を呼ばない）
+  const name = ttsCacheName_(model, voice, text);
+  const folder = ttsCacheFolder_();
+  const it = folder.getFilesByName(name);
+  if (it.hasNext()) {
+    const f = it.next();
+    return { audio: Utilities.base64Encode(f.getBlob().getBytes()), mimeType: f.getDescription() || 'audio/L16;codec=pcm;rate=24000', cached: true };
+  }
+
+  // 2) 上限に達している間は API を呼ばずにすぐ知らせる
+  const cache = CacheService.getScriptCache();
+  if (cache.get('tts_quota_block')) throw err_('今日はAI音声の上限に達しました', 'TTS_QUOTA');
+
   countDaily_('tts', user.email, Number(prop_('DAILY_TTS_LIMIT', '300')), '今日の音声の上限に達しました');
 
   const key = prop_('GEMINI_API_KEY', '');
   if (!key) throw err_('サーバーの設定（GEMINI_API_KEY）が未完了です', 'CONFIG');
-  const model = prop_('GEMINI_TTS_MODEL', 'gemini-2.5-flash-preview-tts');
-  const voice = prop_('TTS_VOICE', 'Puck');
 
   // セリフ本文だけを送る（指示文を付けると、それごと読み上げられてしまうため）
   const body = {
@@ -397,15 +421,53 @@ function tts_(req, user) {
       headers: { 'x-goog-api-key': key },
       payload: JSON.stringify(body), muteHttpExceptions: true
     });
-  if (r.getResponseCode() !== 200) {
-    console.error('TTS error ' + r.getResponseCode() + ': ' + r.getContentText());
+  const code = r.getResponseCode();
+  if (code === 429) {
+    // 「retry in ○○s」を読み取り、その間は API を呼ばない（最大6時間）
+    const m = /retry in ([\d.]+)s/i.exec(r.getContentText());
+    const sec = m ? Math.ceil(Number(m[1])) : 3600;
+    cache.put('tts_quota_block', '1', Math.max(60, Math.min(21600, sec)));
+    console.warn('TTS quota exceeded. retry in ' + sec + 's');
+    throw err_('今日はAI音声の上限に達しました', 'TTS_QUOTA');
+  }
+  if (code !== 200) {
+    console.error('TTS error ' + code + ': ' + r.getContentText());
     throw err_('音声の生成に失敗しました', 'TTS');
   }
   const d = JSON.parse(r.getContentText());
   const parts = ((((d.candidates || [])[0] || {}).content || {}).parts) || [];
   const part = parts.filter(function (p) { return p.inlineData && p.inlineData.data; })[0];
   if (!part) throw err_('音声データが空でした', 'TTS');
-  return { audio: part.inlineData.data, mimeType: part.inlineData.mimeType || 'audio/L16;codec=pcm;rate=24000' };
+  const mime = part.inlineData.mimeType || 'audio/L16;codec=pcm;rate=24000';
+
+  // 3) 次回のためにキャッシュへ保存
+  try {
+    const f = folder.createFile(Utilities.newBlob(Utilities.base64Decode(part.inlineData.data), 'application/octet-stream', name));
+    f.setDescription(mime);
+  } catch (e) { console.warn('TTS cache save failed: ' + e); }
+
+  return { audio: part.inlineData.data, mimeType: mime };
+}
+
+function ttsCacheName_(model, voice, text) {
+  const d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, model + '|' + voice + '|' + text, Utilities.Charset.UTF_8);
+  return d.map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('') + '.pcm';
+}
+
+function ttsCacheFolder_() {
+  const id = prop_('TTS_CACHE_FOLDER_ID', '');
+  if (id) {
+    try { return DriveApp.getFolderById(id); } catch (e) { console.warn('TTS_CACHE_FOLDER_ID のフォルダが見つかりません。作り直します'); }
+  }
+  const f = DriveApp.createFolder('ano-basho-flight 音声キャッシュ');
+  PropertiesService.getScriptProperties().setProperty('TTS_CACHE_FOLDER_ID', f.getId());
+  return f;
+}
+
+// 上限ブロックを手動で解除したいとき（モデルを変えた直後など）にエディタから実行
+function clearTtsQuotaBlock() {
+  CacheService.getScriptCache().remove('tts_quota_block');
+  console.log('AI音声の上限ブロックを解除しました');
 }
 
 /* =========================================================
@@ -740,6 +802,7 @@ function setup() {
   sheet_(SHEET_FLIGHTS);
   sheet_(SHEET_PHOTOS);
   console.log('写真フォルダ: ' + photoFolder_().getName());
+  console.log('音声キャッシュ: ' + ttsCacheFolder_().getName());
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('PEPPER')) {
     props.setProperty('PEPPER', Utilities.getUuid() + Utilities.getUuid());

@@ -4,14 +4,13 @@
  */
 window.APP_CONFIG = {
   APP_NAME: 'あの場所は今 ― イーグル隊長の空中散歩',
-  APP_VERSION: 'v1.3.0',
+  APP_VERSION: 'v1.5.0',
 
   // GAS ウェブアプリURL（…/exec）
   GAS_URL: 'https://script.google.com/macros/s/AKfycbx8EiFChsysjJAe9kHTF1kHJdcjKnsTRWrn2XgeEKpvC8CP0YUcmO_qhRuS3zkQTPbN/exec',
 
-  // Google Maps APIキー（HTTPリファラー制限必須）
-  // 使うAPI：Maps JavaScript API（3D地図フライト・ストリートビュー）／Maps Embed API（航空写真・地図タブ）
-  MAPS_API_KEY: 'AIzaSyBn945ysEAHA_93bp-fx7XSpgUs8YJP6Wk',
+  // Google Maps APIキーは GAS のスクリプトプロパティ「GOOGLE_MAPS_API_KEY」に設定します
+  // （ログイン後にサーバーから受け取るため、ここには書きません）
 
   SESSION_KEY: 'abf_session',
   PREFS_KEY: 'abf_prefs',
@@ -40,7 +39,8 @@ window.APP_CONFIG = {
 
   TTS: {
     useGemini: true,          // GAS経由の Gemini TTS を使う
-    fallbackWebSpeech: true   // 失敗時はブラウザ読み上げで代用
+    fallbackWebSpeech: true,  // 失敗時・上限到達時はブラウザ読み上げで代用
+    mergeGuide: true          // 到着後の解説をまとめて1回の音声にする（AI音声の回数を節約）
   },
 
   // 予備の映像・効果音アセット

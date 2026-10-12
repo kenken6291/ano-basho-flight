@@ -1,4 +1,4 @@
-/* あの場所は今 ― イーグル隊長の空中散歩  app.js v1.3.0 */
+/* あの場所は今 ― イーグル隊長の空中散歩  app.js v1.5.0 */
 (() => {
   'use strict';
 
@@ -249,6 +249,8 @@
       stopEverything();
       try { await api('logout'); } catch { /* noop */ }
       Session.clear();
+      MAPS_KEY = '';
+      mapsKeyP = null;
       switchAuthTab('login');
       showView('auth');
       setMsg($('#auth-msg'), 'ログアウトしました', 'ok');
@@ -270,6 +272,7 @@
     $('#pass-nickname').textContent = s.nickname || '相棒';
     setMsg($('#history-msg'), '');
     showView('home');
+    ensureMapsKey();
     loadHistory();
   }
 
@@ -459,19 +462,29 @@
     resolve: null,
     mode: null,
     timer: null,
+    quotaOut: false,
 
     fetch(text) {
       if (!text) return Promise.resolve(null);
       if (this.cache.has(text)) return this.cache.get(text);
-      const p = (C.TTS && C.TTS.useGemini === false)
-        ? Promise.resolve(null)
-        : api('tts', { text }).then((r) => audioToUrl(r.audio, r.mimeType)).catch(() => null);
+      if ((C.TTS && C.TTS.useGemini === false) || this.quotaOut) return Promise.resolve(null);
+      const p = api('tts', { text })
+        .then((r) => audioToUrl(r.audio, r.mimeType))
+        .catch((err) => {
+          if (err && err.code === 'TTS_QUOTA') {
+            // 今日の上限に達したら、以降はブラウザの声で読む（失敗した文は次回やり直せるよう消す）
+            this.quotaOut = true;
+            $('#voice-note').hidden = false;
+          }
+          this.cache.delete(text);
+          return null;
+        });
       this.cache.set(text, p);
       return p;
     },
     prefetch(list) { (list || []).filter(Boolean).forEach((t) => this.fetch(t)); },
 
-    speak(text) {
+    speak(text, opts = {}) {
       this.stop();
       if (!text) return Promise.resolve();
       const id = ++this.seq;
@@ -485,15 +498,18 @@
             this.el.src = url;
             this.el.volume = this.vol;
             this.el.onended = () => this._done(id);
-            this.el.onerror = () => this._fallback(text, id);
-            this.el.play().catch(() => this._fallback(text, id));
+            this.el.onerror = () => this._fallback(text, id, opts);
+            this.el.ontimeupdate = opts.onProgress
+              ? () => { const d = this.el.duration; if (d && isFinite(d)) opts.onProgress(this.el.currentTime / d); }
+              : null;
+            this.el.play().catch(() => this._fallback(text, id, opts));
           } else {
-            this._fallback(text, id);
+            this._fallback(text, id, opts);
           }
         });
       });
     },
-    _fallback(text, id) {
+    _fallback(text, id, opts = {}) {
       if (id !== this.seq || this.fbId === id) return;
       this.fbId = id;
       if (C.TTS && C.TTS.fallbackWebSpeech !== false && 'speechSynthesis' in window) {
@@ -502,6 +518,7 @@
         u.lang = 'ja-JP'; u.rate = 1.05; u.pitch = 0.85; u.volume = this.vol;
         u.onend = () => this._done(id);
         u.onerror = () => this._done(id);
+        if (opts.onProgress) u.onboundary = (e) => opts.onProgress(e.charIndex / text.length);
         speechSynthesis.cancel();
         speechSynthesis.speak(u);
       } else {
@@ -520,7 +537,7 @@
     stop() {
       this.seq++;
       try { this.el.pause(); } catch { /* noop */ }
-      this.el.onended = null; this.el.onerror = null;
+      this.el.onended = null; this.el.onerror = null; this.el.ontimeupdate = null;
       if ('speechSynthesis' in window) speechSynthesis.cancel();
       clearTimeout(this.timer);
       this._done();
@@ -533,6 +550,14 @@
         if (speechSynthesis.paused) { speechSynthesis.resume(); setPlayUI(true); }
         else { speechSynthesis.pause(); setPlayUI(false, true); }
       }
+    },
+    // 再生中の音声を割合（0〜1）の位置へ移動
+    seek(frac) {
+      if (this.mode !== 'audio') return false;
+      const d = this.el.duration;
+      if (!d || !isFinite(d)) return false;
+      this.el.currentTime = Math.max(0, Math.min(d - 0.05, d * frac));
+      return true;
     },
     setVolume(v) { this.vol = v; this.el.volume = v; }
   };
@@ -666,7 +691,18 @@
   /* =========================================================
    *  Google Maps（3D地図・ストリートビュー）
    * ========================================================= */
-  const MAPS_KEY = C.MAPS_API_KEY || C.MAPS_EMBED_API_KEY || '';
+  // Maps APIキーは GAS のスクリプトプロパティ（GOOGLE_MAPS_API_KEY）からログイン後に受け取る
+  let MAPS_KEY = '';
+  let mapsKeyP = null;
+  function ensureMapsKey() {
+    if (MAPS_KEY) return Promise.resolve(MAPS_KEY);
+    if (!mapsKeyP) {
+      mapsKeyP = api('mapsKey')
+        .then((r) => { MAPS_KEY = r.key || ''; if (!MAPS_KEY) mapsKeyP = null; return MAPS_KEY; })
+        .catch(() => { mapsKeyP = null; return ''; });
+    }
+    return mapsKeyP;
+  }
   const F3 = Object.assign({
     enabled: true,
     mapsVersion: 'beta',
@@ -683,8 +719,8 @@
 
   function loadMaps() {
     if (Maps.promise) return Maps.promise;
-    Maps.promise = new Promise((resolve, reject) => {
-      if (isPlaceholder(MAPS_KEY)) { reject(new Error('Maps APIキーが未設定です')); return; }
+    Maps.promise = ensureMapsKey().then(() => new Promise((resolve, reject) => {
+      if (isPlaceholder(MAPS_KEY)) { Maps.promise = null; reject(new Error('Maps APIキーが未設定です')); return; }
       window.__abfMapsReady = () => { Maps.loaded = true; resolve(window.google.maps); };
       const s = document.createElement('script');
       s.src = 'https://maps.googleapis.com/maps/api/js'
@@ -694,7 +730,7 @@
       s.async = true;
       s.onerror = () => reject(new Error('Google Maps を読み込めませんでした'));
       document.head.appendChild(s);
-    });
+    }));
     Maps.promise.catch(() => {});
     return Maps.promise;
   }
@@ -848,6 +884,7 @@
 
   async function chooseEngine(input) {
     const st = $('#stage');
+    await ensureMapsKey();
     if (Earth3D.available()) {
       try {
         await Earth3D.init();
@@ -1101,24 +1138,66 @@
   /* =========================================================
    *  到着：「あの場所は今」
    * ========================================================= */
+  // 解説は「到着のひと言」以外をまとめて1回の音声にする（AI音声の回数を節約）
+  const MERGE_GUIDE = !(C.TTS && C.TTS.mergeGuide === false);
+
   const Guide = {
     run: 0,
     segs: [],
+    bounds: null,
     stop() {
       this.run++;
+      this.bounds = null;
       Voice.stop();
       markSpeaking(null);
     },
-    async play(from = 0) {
+    singles() { return MERGE_GUIDE ? this.segs.filter((x) => x.key === 'arrival') : this.segs; },
+    body() { return MERGE_GUIDE ? this.segs.filter((x) => x.key !== 'arrival') : []; },
+    mergedText() { return this.body().map((x) => x.text).join('\n'); },
+    texts() {
+      const t = this.singles().map((x) => x.text);
+      if (this.body().length) t.push(this.mergedText());
+      return t;
+    },
+    async play() {
       const run = ++this.run;
-      for (let i = from; i < this.segs.length; i++) {
+      this.bounds = null;
+      for (const seg of this.singles()) {
         if (run !== this.run) return;
-        const seg = this.segs[i];
         markSpeaking(seg.key);
         if (seg.bubble) $('#arrival-bubble').textContent = seg.text;
         await Voice.speak(seg.text);
       }
-      if (run === this.run) markSpeaking(null);
+      const body = this.body();
+      if (body.length && run === this.run) {
+        const text = this.mergedText();
+        let acc = 0;
+        this.bounds = body.map((x) => { const b = { key: x.key, start: acc / text.length, bubble: x.bubble, text: x.text }; acc += x.text.length + 1; return b; });
+        let cur = -1;
+        const onProgress = (f) => {
+          if (run !== this.run || !this.bounds) return;
+          let idx = 0;
+          this.bounds.forEach((b, i) => { if (f >= b.start) idx = i; });
+          if (idx === cur) return;
+          cur = idx;
+          const b = this.bounds[idx];
+          markSpeaking(b.key);
+          if (b.bubble) $('#arrival-bubble').textContent = b.text;
+        };
+        onProgress(0);
+        await Voice.speak(text, { onProgress });
+      }
+      if (run === this.run) { this.bounds = null; markSpeaking(null); }
+    },
+    // 「次へ」：まとめた音声の中では次の段落へ移動
+    next() {
+      if (this.bounds && Voice.mode === 'audio') {
+        const d = Voice.el.duration;
+        const f = d ? Voice.el.currentTime / d : 0;
+        const nb = this.bounds.find((b) => b.start > f + 0.01);
+        if (nb && Voice.seek(nb.start)) return;
+      }
+      Voice.stop();
     }
   };
 
@@ -1166,8 +1245,8 @@
       { key: 'trivia', text: s.trivia },
       { key: 'closing', text: s.closing, bubble: true }
     ].filter((x) => x.text);
-    Voice.prefetch(Guide.segs.map((x) => x.text));
-    if (opts.autoplay !== false) Guide.play(0);
+    Voice.prefetch(Guide.texts());
+    if (opts.autoplay !== false) Guide.play();
 
     const hist = State.history.find((x) => x.id === plan.id);
     Arrival.saved = !!(hist && hist.saved);
@@ -1515,10 +1594,12 @@
 
     $('#btn-play').addEventListener('click', () => {
       if (Voice.mode) { Voice.togglePause(); return; }
-      if (document.body.dataset.view === 'arrival') Guide.play(0);
+      if (document.body.dataset.view === 'arrival') Guide.play();
     });
-    $('#btn-next').addEventListener('click', () => Voice.stop());
-    $('#btn-replay').addEventListener('click', () => Guide.play(0));
+    $('#btn-next').addEventListener('click', () => {
+      if (document.body.dataset.view === 'arrival') Guide.next(); else Voice.stop();
+    });
+    $('#btn-replay').addEventListener('click', () => Guide.play());
     $('#vol-voice').addEventListener('input', (e) => {
       const v = Number(e.target.value); Voice.setVolume(v); Prefs.set({ ...Prefs.get(), voice: v });
     });
