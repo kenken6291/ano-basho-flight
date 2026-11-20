@@ -154,6 +154,11 @@
             <span>思い出メモ（任意・300文字まで）</span>
             <textarea name="memory" rows="3" maxlength="300" placeholder="例：校門の前に駄菓子屋があって、毎日10円のくじを引いていた"></textarea>
           </label>
+          <label class="field model-picker">
+            <span>隊長の頭脳（AIモデル）</span>
+            <select id="model-select"></select>
+            <small class="model-hint">選んだモデルが使えない時は、汎用の最新モデルに自動で切り替わります</small>
+          </label>
           <p class="msg" id="flight-msg" role="status" aria-live="polite"></p>
         </div>
         <div class="pass-stub">
@@ -356,6 +361,7 @@
 <footer class="footer">
   <span>あの場所は今 ― イーグル隊長の空中散歩</span>
   <span class="version" id="app-version"></span>
+  <span class="version" id="app-model"></span>
 </footer>
 
 <script src="config.js"></script>

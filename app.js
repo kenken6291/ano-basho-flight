@@ -85,6 +85,45 @@
   const State = { history: [], serverVersion: '' };
 
   /* =========================================================
+   *  Geminiモデル選択
+   * ========================================================= */
+  const MODEL_OPTIONS = Array.isArray(C.GEMINI_MODEL_OPTIONS) && C.GEMINI_MODEL_OPTIONS.length
+    ? C.GEMINI_MODEL_OPTIONS : [{ value: '', label: '自動モード（汎用の最新）' }];
+  const Model = {
+    key: C.MODEL_KEY || 'abf_gemini_model',
+    value: C.GEMINI_MODEL || '',
+    label(v) { const o = MODEL_OPTIONS.find((x) => x.value === v); return o ? o.label : (v || '自動モード'); },
+    show(text) { const el = $('#app-model'); if (el) el.textContent = text ? `AIモデル：${text}` : ''; },
+    init() {
+      let saved = null;
+      try { saved = localStorage.getItem(this.key); } catch { /* noop */ }
+      if (saved !== null && MODEL_OPTIONS.some((o) => o.value === saved)) this.value = saved;
+      const sel = $('#model-select');
+      if (!sel) return;
+      sel.innerHTML = '';
+      MODEL_OPTIONS.forEach((o) => {
+        const op = document.createElement('option');
+        op.value = o.value; op.textContent = o.label;
+        op.defaultSelected = o.value === this.value; // フォームをリセットしても選択を保つ
+        sel.appendChild(op);
+      });
+      sel.value = this.value;
+      sel.addEventListener('change', () => {
+        this.value = sel.value;
+        [...sel.options].forEach((op) => { op.defaultSelected = op.value === this.value; });
+        try { localStorage.setItem(this.key, this.value); } catch { /* noop */ }
+        this.show(this.label(this.value));
+      });
+      this.show(this.label(this.value));
+    },
+    // サーバーの応答から実際に使われたモデルを表示
+    applyResult(r) {
+      if (!r || !r.model) return;
+      this.show(r.fallback ? `${r.model}（${r.requestedModel} が使えなかったため自動で切替）` : r.model);
+    }
+  };
+
+  /* =========================================================
    *  API（GAS）
    * ========================================================= */
   async function api(action, payload = {}) {
@@ -286,7 +325,7 @@
       const place = f.place.value.trim();
       if (!place) { setMsg($('#flight-msg'), '行き先を入力してください', 'error'); f.place.focus(); return; }
       setMsg($('#flight-msg'), '');
-      startFlight({ place, era: f.era.value, memory: f.memory.value.trim() });
+      startFlight({ place, era: f.era.value, memory: f.memory.value.trim(), model: Model.value });
     });
 
     $('#view-home').addEventListener('click', (e) => {
@@ -1000,7 +1039,7 @@
     setPhase('ready', '離陸準備中');
     sayFlight(LINES.preparing);
 
-    const planT = track(cachedPlan ? Promise.resolve(cachedPlan) : api('planFlight', input).then((r) => r.plan));
+    const planT = track(cachedPlan ? Promise.resolve(cachedPlan) : api('planFlight', { ...input, model: Model.value }).then((r) => { Model.applyResult(r); return r.plan; }));
     planT.p.then((p) => {
       Flight.plan = p;
       const s = p.script || {};
@@ -1616,6 +1655,7 @@
     $$('.eye').forEach((b) => { b.innerHTML = ICON.eye; });
     if (C.APP_NAME) document.title = C.APP_NAME;
     renderVersion();
+    Model.init();
     if (isPlaceholder(C.GAS_URL)) $('#config-warning').hidden = false;
 
     bindAuth();

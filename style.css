@@ -518,3 +518,7 @@ body[data-view="arrival"] .footer { padding-bottom: 130px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+/* ---------- AIモデル選択 ---------- */
+.model-picker .model-hint { font-size: .78rem; color: var(--muted); line-height: 1.5; }
+.footer #app-model:empty { display: none; }

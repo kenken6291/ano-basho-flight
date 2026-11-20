@@ -1,4 +1,4 @@
-# あの場所は今 ― イーグル隊長の空中散歩（ano-basho-flight） v1.5.0
+# あの場所は今 ― イーグル隊長の空中散歩（ano-basho-flight） v1.6.0
 
 行き先を入力すると、陽気な鷲「イーグル隊長」の足につかまって上空を飛び、
 目的地に舞い降りて「昔と今」を音声で案内してくれる Web アプリです。
@@ -17,6 +17,13 @@ ano-basho-flight/
    ├─ video/ takeoff.mp4  cruise.mp4  dive.mp4
    └─ se/    eagle-cry.mp3  wind-loop.mp3  whoosh.mp3
 ```
+
+## v1.6.0：Geminiの最新バージョンに対応
+- 搭乗券に「隊長の頭脳（AIモデル）」選択を追加（自動モード／4 Hydrogen／4 Neon／4 Carbon／4 Argon／3.8 Flash／3.5 Flash）。選択はブラウザに保存
+- 選んだモデルが使えない時は、汎用の最新モデル（gemini-flash-latest → gemini-4-hydrogen → gemini-3.8-flash）へ自動で切り替え
+- 実際に使われたモデルを画面下部に表示
+- AI音声は gemini-3.8-flash-tts を優先し、使えなければ 2.5 TTS へ自動で切り替え
+- 一時的なエラー（500/503）は自動で再試行。エディタで `listGeminiModels()` を実行すると使えるモデル一覧を確認できます
 
 ## v1.5.0：AI音声（Gemini TTS）の回数を節約
 
@@ -111,8 +118,8 @@ Google Earth Studio は、ブラウザで手作業で映像を作って書き出
    | `GEMINI_API_KEY` | Gemini API キー（必須） |
    | `GOOGLE_MAPS_API_KEY` | Google Maps API キー（必須。リファラー制限を付けたもの） |
    | `APP_URL` | `https://kenken6291.github.io/ano-basho-flight/` |
-   | `GEMINI_MODEL` | 任意（既定 `gemini-2.5-flash`） |
-   | `GEMINI_TTS_MODEL` | 任意（既定 `gemini-2.5-flash-preview-tts`）※普段使っているTTSモデル名に合わせてください |
+   | `GEMINI_MODEL` | 任意（自動モード時のモデル。未設定なら汎用の最新モデル） |
+   | `GEMINI_TTS_MODEL` | 任意（未設定なら `gemini-3.8-flash-tts` → `gemini-2.5-flash-preview-tts` の順に自動） |
    | `TTS_VOICE` | 任意（既定 `Puck`） |
    | `USE_SEARCH` | 任意（既定 `true`） |
 4. エディタで `setup` を実行 → 権限を承認（スプレッドシート・メール・Maps・外部通信）

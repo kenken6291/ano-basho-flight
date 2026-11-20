@@ -1,6 +1,6 @@
 /**
  * あの場所は今 ― イーグル隊長の空中散歩
- * Code.gs（Google Apps Script） v1.5.0
+ * Code.gs（Google Apps Script） v1.6.0
  *
  * ■ スクリプトプロパティ（プロジェクトの設定 → スクリプト プロパティ）
  *   GEMINI_API_KEY      （必須）Gemini API キー
@@ -8,8 +8,9 @@
  *   APP_URL             （推奨）例: https://kenken6291.github.io/ano-basho-flight/
  *   PEPPER              （自動）setup() 実行時に自動生成。絶対に変更しないこと
  *   SPREADSHEET_ID      （任意）未設定ならコンテナバインドのスプレッドシートを使用
- *   GEMINI_MODEL        （任意）既定: gemini-2.5-flash
- *   GEMINI_TTS_MODEL    （任意）既定: gemini-2.5-flash-preview-tts
+ *   GEMINI_MODEL        （任意）画面で「自動モード」の時に使うモデル。未設定なら汎用の最新モデル
+ *                       ※ 以前 gemini-2.5-flash を入れていた場合は削除してください（自動で最新になります）
+ *   GEMINI_TTS_MODEL    （任意）音声モデル。未設定なら gemini-3.8-flash-tts → 使えなければ 2.5 TTS に自動切替
  *   TTS_VOICE           （任意）既定: Puck（陽気）。Fenrir（勢い）/ Charon（渋め）なども可
  *   USE_SEARCH          （任意）true/false 既定: true（Google検索グラウンディング）
  *   DAILY_FLIGHT_LIMIT  （任意）1人あたりのフライト生成回数/日 既定: 20
@@ -18,10 +19,28 @@
  *   PHOTO_FOLDER_ID     （自動）思い出の写真を保存するDriveフォルダ。setup() で自動作成
  *   TTS_CACHE_FOLDER_ID （自動）生成した音声のキャッシュ用Driveフォルダ（同じセリフはAPIを呼ばずに再利用）
  *
+ * ■ Geminiモデルの決定順（台本生成）
+ *   1. 画面の「AIモデル」で選ばれたモデル
+ *   2. スクリプトプロパティ GEMINI_MODEL
+ *   3. 汎用の最新モデル FALLBACK_GEMINI_MODELS を先頭から順に
+ *   ※ 指定モデルが廃止・未公開・名前違いの場合は、自動で 3 に切り替えて再実行します
+ *   ※ 使えるモデル一覧はエディタで listGeminiModels() を実行するとログに出ます
+ *
  * ■ 重要：コードを変更したら「デプロイを管理 → 編集 → バージョン：新バージョン」で再デプロイ
  */
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
+
+// 指定なし・該当なしの時に使う汎用最新モデル（先頭から順に試す）
+//   gemini-flash-latest : Googleが常に最新の汎用モデルへ自動で差し替えるエイリアス
+//   gemini-4-hydrogen   : 2026年11月時点の汎用最新モデル（「日々の暮らしをサポート」）
+//   gemini-3.8-flash    : 最終的な保険
+const FALLBACK_GEMINI_MODELS = ['gemini-flash-latest', 'gemini-4-hydrogen', 'gemini-3.8-flash'];
+// 音声（TTS）モデルの候補（先頭から順に試す）
+const FALLBACK_TTS_MODELS = ['gemini-3.8-flash-tts', 'gemini-2.5-flash-preview-tts'];
+const GEMINI_MODEL_PATTERN = /^gemini-[a-z0-9][a-z0-9.\-]{0,60}$/;
+const GEMINI_RETRY_CODES = [500, 503];
+const GEMINI_MAX_ATTEMPTS = 3;
 
 const SHEET_MEMBERS = 'members';
 const SHEET_FLIGHTS = 'flights';
@@ -258,10 +277,11 @@ function planFlight_(req, user) {
     '今日のフライト回数の上限に達しました。また明日いっしょに飛ぼうぜ！');
 
   const geo = geocode_(query);
+  const requestedModel = resolveGeminiModel_(req.model);
   const gen = generateScript_({
     query: query, address: geo.address, lat: geo.lat, lng: geo.lng,
     era: era, memory: memory, nickname: user.nickname
-  });
+  }, requestedModel);
 
   const plan = {
     id: Utilities.getUuid(),
@@ -270,6 +290,7 @@ function planFlight_(req, user) {
     memory: memory,
     script: gen.script,
     sources: gen.sources,
+    model: gen.model,
     createdAt: new Date().toISOString()
   };
 
@@ -281,7 +302,7 @@ function planFlight_(req, user) {
     ]);
   } catch (e) { console.error(e); }
 
-  return { plan: plan };
+  return { plan: plan, model: gen.model, requestedModel: requestedModel, fallback: gen.model !== requestedModel };
 }
 
 function geocode_(q) {
@@ -297,18 +318,18 @@ function geocode_(q) {
   };
 }
 
-function generateScript_(ctx) {
+function generateScript_(ctx, model) {
   const userPrompt = buildUserPrompt_(ctx);
   const useSearch = prop_('USE_SEARCH', 'true') === 'true';
 
-  let res = callGemini_(EAGLE_SYSTEM_PROMPT, userPrompt, useSearch);
+  let res = callGemini_(EAGLE_SYSTEM_PROMPT, userPrompt, useSearch, model);
   let obj = parseJson_(res.text);
   if (!obj && useSearch) { // 検索ありでJSONが崩れた場合は検索なし（JSONモード）で再試行
-    res = callGemini_(EAGLE_SYSTEM_PROMPT, userPrompt, false);
+    res = callGemini_(EAGLE_SYSTEM_PROMPT, userPrompt, false, res.model);
     obj = parseJson_(res.text);
   }
   if (!obj) throw err_('イーグル隊長が台本を考えきれなかったようです。もう一度試してください', 'AI');
-  return { script: normalizeScript_(obj, ctx), sources: res.sources || [] };
+  return { script: normalizeScript_(obj, ctx), sources: res.sources || [], model: res.model };
 }
 
 function normalizeScript_(o, ctx) {
@@ -328,10 +349,10 @@ function normalizeScript_(o, ctx) {
   };
 }
 
-function callGemini_(sys, user, useSearch) {
+function callGemini_(sys, user, useSearch, model) {
   const key = prop_('GEMINI_API_KEY', '');
   if (!key) throw err_('サーバーの設定（GEMINI_API_KEY）が未完了です', 'CONFIG');
-  const model = prop_('GEMINI_MODEL', 'gemini-2.5-flash');
+  const first = model || resolveGeminiModel_('');
 
   const body = {
     system_instruction: { parts: [{ text: sys }] },
@@ -341,20 +362,24 @@ function callGemini_(sys, user, useSearch) {
   if (useSearch) body.tools = [{ google_search: {} }];
   else body.generationConfig.responseMimeType = 'application/json';
 
-  const r = UrlFetchApp.fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent',
-    {
-      method: 'post', contentType: 'application/json',
-      headers: { 'x-goog-api-key': key },
-      payload: JSON.stringify(body), muteHttpExceptions: true
-    });
-  const code = r.getResponseCode();
+  // 指定モデル → 汎用の最新モデル の順に試す（該当なしの時だけ次へ）
+  const candidates = [first].concat(FALLBACK_GEMINI_MODELS.filter(function (m) { return m !== first; }));
+  let usedModel = first;
+  let r = null;
+  for (let i = 0; i < candidates.length; i++) {
+    usedModel = candidates[i];
+    r = fetchGemini_(usedModel, key, body);
+    if (!isModelNotFound_(r.code, r.text)) break;
+    console.warn('Geminiモデル「' + usedModel + '」に該当がないため次の候補に切り替えます');
+  }
+  const code = r.code;
   if (code !== 200) {
-    console.error('Gemini error ' + code + ': ' + r.getContentText());
+    console.error('Gemini error ' + code + ' (' + usedModel + '): ' + r.text);
     if (code === 429) throw err_('AIが混み合っています。少し時間をおいて試してください', 'AI');
     throw err_('AIの呼び出しに失敗しました（' + code + '）', 'AI');
   }
-  const d = JSON.parse(r.getContentText());
+  if (usedModel !== first) console.warn('Geminiモデルを「' + first + '」→「' + usedModel + '」に自動で切り替えました');
+  const d = JSON.parse(r.text);
   const c = (d.candidates || [])[0] || {};
   const text = ((c.content || {}).parts || []).map(function (p) { return p.text || ''; }).join('');
 
@@ -366,7 +391,49 @@ function callGemini_(sys, user, useSearch) {
       sources.push({ title: ch.web.title || '参考ページ', uri: ch.web.uri });
     }
   });
-  return { text: text, sources: sources };
+  return { text: text, sources: sources, model: usedModel };
+}
+
+/**
+ * 使用するGeminiモデル名を決定する（画面の指定 → スクリプトプロパティ → 汎用の最新）。不正な名前は無視
+ */
+function resolveGeminiModel_(requested) {
+  const req = String(requested || '').trim().toLowerCase();
+  if (req && GEMINI_MODEL_PATTERN.test(req)) return req;
+  const prop = String(prop_('GEMINI_MODEL', '') || '').trim().toLowerCase();
+  if (prop && GEMINI_MODEL_PATTERN.test(prop)) return prop;
+  return FALLBACK_GEMINI_MODELS[0];
+}
+
+/**
+ * Gemini API を1モデルに対して呼び出す。一時的なエラー（500/503）は待ち時間を伸ばしながら再試行
+ */
+function fetchGemini_(model, key, body) {
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
+  const opt = {
+    method: 'post', contentType: 'application/json',
+    headers: { 'x-goog-api-key': key },
+    payload: JSON.stringify(body), muteHttpExceptions: true
+  };
+  let code = 0, text = '';
+  for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt++) {
+    const res = UrlFetchApp.fetch(url, opt);
+    code = res.getResponseCode();
+    text = res.getContentText();
+    if (code === 200) break;
+    if (GEMINI_RETRY_CODES.indexOf(code) === -1 || attempt === GEMINI_MAX_ATTEMPTS) break;
+    Utilities.sleep(1500 * attempt);
+  }
+  return { code: code, text: text };
+}
+
+/**
+ * モデルが存在しない（廃止・未公開・名前違い）ことを示す応答かどうか
+ */
+function isModelNotFound_(code, text) {
+  if (code === 404) return true;
+  if (code === 400) return /not found|is not supported|NOT_FOUND|unknown model|invalid model/i.test(text || '');
+  return false;
 }
 
 function parseJson_(text) {
@@ -385,16 +452,19 @@ function tts_(req, user) {
   const text = String(req.text || '').trim().slice(0, 1500);
   if (!text) throw err_('読み上げる文がありません');
 
-  const model = prop_('GEMINI_TTS_MODEL', 'gemini-2.5-flash-preview-tts');
   const voice = prop_('TTS_VOICE', 'Puck');
+  const propTts = String(prop_('GEMINI_TTS_MODEL', '') || '').trim().toLowerCase();
+  const ttsModels = (propTts && GEMINI_MODEL_PATTERN.test(propTts) ? [propTts] : [])
+    .concat(FALLBACK_TTS_MODELS.filter(function (m) { return m !== propTts; }));
+  const folder = ttsCacheFolder_();
 
   // 1) 同じセリフを前に作っていれば、Drive のキャッシュから返す（API を呼ばない）
-  const name = ttsCacheName_(model, voice, text);
-  const folder = ttsCacheFolder_();
-  const it = folder.getFilesByName(name);
-  if (it.hasNext()) {
-    const f = it.next();
-    return { audio: Utilities.base64Encode(f.getBlob().getBytes()), mimeType: f.getDescription() || 'audio/L16;codec=pcm;rate=24000', cached: true };
+  for (let i = 0; i < ttsModels.length; i++) {
+    const it = folder.getFilesByName(ttsCacheName_(ttsModels[i], voice, text));
+    if (it.hasNext()) {
+      const f = it.next();
+      return { audio: Utilities.base64Encode(f.getBlob().getBytes()), mimeType: f.getDescription() || 'audio/L16;codec=pcm;rate=24000', cached: true };
+    }
   }
 
   // 2) 上限に達している間は API を呼ばずにすぐ知らせる
@@ -414,27 +484,29 @@ function tts_(req, user) {
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
     }
   };
-  const r = UrlFetchApp.fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent',
-    {
-      method: 'post', contentType: 'application/json',
-      headers: { 'x-goog-api-key': key },
-      payload: JSON.stringify(body), muteHttpExceptions: true
-    });
-  const code = r.getResponseCode();
+  // 候補モデルを順に試す（使えない・形式が合わない時は次のモデルへ）
+  let model = ttsModels[0];
+  let r = null;
+  for (let i = 0; i < ttsModels.length; i++) {
+    model = ttsModels[i];
+    r = fetchGemini_(model, key, body);
+    if (r.code === 200 || r.code === 429) break;
+    if (i < ttsModels.length - 1) console.warn('TTSモデル「' + model + '」が使えないため次の候補に切り替えます（' + r.code + '）');
+  }
+  const code = r.code;
   if (code === 429) {
     // 「retry in ○○s」を読み取り、その間は API を呼ばない（最大6時間）
-    const m = /retry in ([\d.]+)s/i.exec(r.getContentText());
+    const m = /retry in ([\d.]+)s/i.exec(r.text);
     const sec = m ? Math.ceil(Number(m[1])) : 3600;
     cache.put('tts_quota_block', '1', Math.max(60, Math.min(21600, sec)));
     console.warn('TTS quota exceeded. retry in ' + sec + 's');
     throw err_('今日はAI音声の上限に達しました', 'TTS_QUOTA');
   }
   if (code !== 200) {
-    console.error('TTS error ' + code + ': ' + r.getContentText());
+    console.error('TTS error ' + code + ' (' + model + '): ' + r.text);
     throw err_('音声の生成に失敗しました', 'TTS');
   }
-  const d = JSON.parse(r.getContentText());
+  const d = JSON.parse(r.text);
   const parts = ((((d.candidates || [])[0] || {}).content || {}).parts) || [];
   const part = parts.filter(function (p) { return p.inlineData && p.inlineData.data; })[0];
   if (!part) throw err_('音声データが空でした', 'TTS');
@@ -442,11 +514,12 @@ function tts_(req, user) {
 
   // 3) 次回のためにキャッシュへ保存
   try {
+    const name = ttsCacheName_(model, voice, text);
     const f = folder.createFile(Utilities.newBlob(Utilities.base64Decode(part.inlineData.data), 'application/octet-stream', name));
     f.setDescription(mime);
   } catch (e) { console.warn('TTS cache save failed: ' + e); }
 
-  return { audio: part.inlineData.data, mimeType: mime };
+  return { audio: part.inlineData.data, mimeType: mime, model: model };
 }
 
 function ttsCacheName_(model, voice, text) {
@@ -811,6 +884,7 @@ function setup() {
   // 権限承認用（Maps・メール・外部通信）
   Maps.newGeocoder().geocode('東京駅');
   console.log('メール残数/日: ' + MailApp.getRemainingDailyQuota());
+  console.log('既定のAIモデル: ' + resolveGeminiModel_(''));
   console.log('setup 完了 v' + APP_VERSION);
 }
 
@@ -822,5 +896,24 @@ function testScript() {
 
 function testTts() {
   const r = tts_({ text: 'しっかりつかまれ、相棒！いくぜ！' }, { email: 'test@example.com' });
-  console.log(r.mimeType + ' / base64長: ' + r.audio.length);
+  console.log((r.model || 'キャッシュ') + ' / ' + r.mimeType + ' / base64長: ' + r.audio.length);
+}
+
+// APIキーで使える Gemini モデルの一覧をログに出す（モデル名の確認用）
+function listGeminiModels() {
+  const key = prop_('GEMINI_API_KEY', '');
+  if (!key) { console.log('GEMINI_API_KEY が未設定です'); return; }
+  let pageToken = '';
+  do {
+    const r = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200' + (pageToken ? '&pageToken=' + pageToken : ''),
+      { headers: { 'x-goog-api-key': key }, muteHttpExceptions: true });
+    if (r.getResponseCode() !== 200) { console.log('取得失敗 ' + r.getResponseCode() + ': ' + r.getContentText()); return; }
+    const d = JSON.parse(r.getContentText());
+    (d.models || []).forEach(function (m) {
+      if ((m.supportedGenerationMethods || []).indexOf('generateContent') >= 0) {
+        console.log(String(m.name).replace('models/', '') + '  … ' + (m.displayName || ''));
+      }
+    });
+    pageToken = d.nextPageToken || '';
+  } while (pageToken);
 }
